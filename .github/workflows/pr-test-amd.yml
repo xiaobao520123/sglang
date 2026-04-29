@@ -578,11 +578,50 @@ jobs:
         run: |
           bash scripts/ci/amd/amd_ci_exec.sh -w "/sglang-checkout/test" python3 run_suite.py --hw amd --suite stage-b-test-2-gpu-large-amd --auto-partition-id ${{ matrix.part }} --auto-partition-size 2 --timeout-per-file 2700 ${{ needs.check-changes.outputs.continue_on_error == 'true' && '--continue-on-error' || '' }}
 
-  multimodal-gen-test-1-gpu-amd:
-    name: ${{ format('multimodal-gen-test-1-gpu-amd (linux-{0}-1gpu-sglang, {1})', inputs.runner_arch || (github.event_name == 'pull_request' && 'mi300' || 'mi325'), matrix.part) }}
+  compute-diffusion-partitions:
     needs: [check-changes, call-gate]
     if: |
       always() && !cancelled() &&
+      (
+        contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',multimodal-gen-test-1-gpu-amd,') ||
+        contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',multimodal-gen-test-2-gpu-amd,') ||
+        (
+          !(inputs.target_stage || inputs.target_stage_select) &&
+          (needs.call-gate.result == 'success' || needs.call-gate.result == 'skipped') &&
+          needs.check-changes.outputs.multimodal_gen == 'true'
+        )
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      matrix-1gpu: ${{ steps.compute.outputs.matrix-1gpu }}
+      matrix-2gpu: ${{ steps.compute.outputs.matrix-2gpu }}
+      partition-count-1gpu: ${{ steps.compute.outputs['partition-count-1gpu'] }}
+      partition-count-2gpu: ${{ steps.compute.outputs['partition-count-2gpu'] }}
+      plan-1gpu: ${{ steps.compute.outputs.plan-1gpu }}
+      plan-2gpu: ${{ steps.compute.outputs.plan-2gpu }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr_head_sha || inputs.ref || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Compute diffusion partitions
+        id: compute
+        run: |
+          python scripts/ci/utils/diffusion/compute_diffusion_partitions.py --min-time 900 --target-time 1200 --max-time 1800 --max-partitions 10
+
+  multimodal-gen-test-1-gpu-amd:
+    name: ${{ format('multimodal-gen-test-1-gpu-amd (linux-{0}-1gpu-sglang, {1})', inputs.runner_arch || (github.event_name == 'pull_request' && 'mi300' || 'mi325'), matrix.part) }}
+    needs: [check-changes, call-gate, compute-diffusion-partitions]
+    if: |
+      always() && !cancelled() &&
+      needs.compute-diffusion-partitions.result == 'success' &&
+      needs.compute-diffusion-partitions.outputs.matrix-1gpu != '{"include":[]}' &&
       (
         (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',multimodal-gen-test-1-gpu-amd,')) ||
         (
@@ -593,8 +632,7 @@ jobs:
       )
     strategy:
       fail-fast: false
-      matrix:
-        part: [0, 1, 2, 3]
+      matrix: ${{ fromJson(needs.compute-diffusion-partitions.outputs.matrix-1gpu) }}
     runs-on: ${{ format('linux-{0}-1gpu-sglang', inputs.runner_arch || (github.event_name == 'pull_request' && 'mi300' || 'mi325')) }}
     steps:
       - name: Checkout code
@@ -624,7 +662,7 @@ jobs:
 
       - name: Setup kernel caches
         run: |
-          # Use the persistent /sgl-data directory (mounted from /home/runner/sgl-data)
+          # Use the persistent /sgl-data directory (mounted from /home/runner/sglang-data)
           # This directory persists across container restarts on the self-hosted runner
           docker exec ci_sglang mkdir -p /sgl-data/aiter-kernels /sgl-data/miopen-cache /sgl-data/hf-cache/hub
 
@@ -654,7 +692,7 @@ jobs:
           free -h
           echo ""
           echo "=== Disk Space ==="
-          df -h /home/runner/sgl-data 2>/dev/null || df -h
+          df -h /home/runner/sglang-data 2>/dev/null || df -h
           echo ""
           echo "=== HF Cache Directory Structure ==="
           docker exec ci_sglang ls -la /sgl-data/hf-cache/ 2>/dev/null || echo "HF cache dir not found"
@@ -676,7 +714,10 @@ jobs:
           docker exec ci_sglang rocm-smi --showmeminfo vram 2>/dev/null || echo "rocm-smi not available"
 
       - name: Run diffusion server tests (1-GPU)
-        timeout-minutes: 90
+        timeout-minutes: 120
+        env:
+          CONTINUE_ON_ERROR_FLAG: ${{ needs.check-changes.outputs.continue_on_error == 'true' && '--continue-on-error' || '' }}
+          PARTITION_PLAN_JSON: ${{ needs.compute-diffusion-partitions.outputs.plan-1gpu }}
         run: |
           # AMD CI: All 1-GPU tests except FLUX.2 (FLUX.1 covers same code path)
           # Tests: T2V, T2I, I2V, LoRA
@@ -700,9 +741,10 @@ jobs:
             ci_sglang python3 sglang/multimodal_gen/test/run_suite.py \
               --suite 1-gpu \
               --partition-id ${{ matrix.part }} \
-              --total-partitions 4 \
+              --total-partitions ${{ needs.compute-diffusion-partitions.outputs['partition-count-1gpu'] }} \
+              --partition-plan-json "$PARTITION_PLAN_JSON" \
               -k "not flux_2" \
-              ${{ needs.check-changes.outputs.continue_on_error == 'true' && '--continue-on-error' || '' }}
+              $CONTINUE_ON_ERROR_FLAG
 
           # Post-test diagnostics
           echo "=== Post-test System Memory Status ==="
@@ -710,9 +752,11 @@ jobs:
 
   multimodal-gen-test-2-gpu-amd:
     name: ${{ format('multimodal-gen-test-2-gpu-amd (linux-{0}-2gpu-sglang, {1})', inputs.runner_arch || (github.event_name == 'pull_request' && 'mi300' || 'mi325'), matrix.part) }}
-    needs: [check-changes, call-gate]
+    needs: [check-changes, call-gate, compute-diffusion-partitions]
     if: |
       always() && !cancelled() &&
+      needs.compute-diffusion-partitions.result == 'success' &&
+      needs.compute-diffusion-partitions.outputs.matrix-2gpu != '{"include":[]}' &&
       (
         (contains(format(',{0},', inputs.target_stage || inputs.target_stage_select), ',multimodal-gen-test-2-gpu-amd,')) ||
         (
@@ -723,8 +767,7 @@ jobs:
       )
     strategy:
       fail-fast: false
-      matrix:
-        part: [0, 1, 2]  # 3 partitions: 2 parametrized + 1 standalone (test_disagg_server.py)
+      matrix: ${{ fromJson(needs.compute-diffusion-partitions.outputs.matrix-2gpu) }}
     runs-on: ${{ format('linux-{0}-2gpu-sglang', inputs.runner_arch || (github.event_name == 'pull_request' && 'mi300' || 'mi325')) }}
     steps:
       - name: Checkout code
@@ -754,7 +797,7 @@ jobs:
 
       - name: Setup kernel caches
         run: |
-          # Use the persistent /sgl-data directory (mounted from /home/runner/sgl-data)
+          # Use the persistent /sgl-data directory (mounted from /home/runner/sglang-data)
           docker exec ci_sglang mkdir -p /sgl-data/aiter-kernels /sgl-data/miopen-cache /sgl-data/hf-cache/hub
 
           # Clear pre-built AITER kernels from Docker image to avoid segfaults
@@ -783,7 +826,7 @@ jobs:
           free -h
           echo ""
           echo "=== Disk Space ==="
-          df -h /home/runner/sgl-data 2>/dev/null || df -h
+          df -h /home/runner/sglang-data 2>/dev/null || df -h
           echo ""
           echo "=== HF Cache Directory Structure ==="
           docker exec ci_sglang ls -la /sgl-data/hf-cache/ 2>/dev/null || echo "HF cache dir not found"
@@ -805,7 +848,10 @@ jobs:
           docker exec ci_sglang rocm-smi --showmeminfo vram 2>/dev/null || echo "rocm-smi not available"
 
       - name: Run diffusion server tests (2-GPU)
-        timeout-minutes: 90
+        timeout-minutes: 150
+        env:
+          CONTINUE_ON_ERROR_FLAG: ${{ needs.check-changes.outputs.continue_on_error == 'true' && '--continue-on-error' || '' }}
+          PARTITION_PLAN_JSON: ${{ needs.compute-diffusion-partitions.outputs.plan-2gpu }}
         run: |
           # AMD CI: All 2-GPU tests including LoRA
           # Tests: T2V, T2I, I2V, LoRA
@@ -829,8 +875,9 @@ jobs:
             ci_sglang python3 sglang/multimodal_gen/test/run_suite.py \
               --suite 2-gpu \
               --partition-id ${{ matrix.part }} \
-              --total-partitions 3 \
-              ${{ needs.check-changes.outputs.continue_on_error == 'true' && '--continue-on-error' || '' }}
+              --total-partitions ${{ needs.compute-diffusion-partitions.outputs['partition-count-2gpu'] }} \
+              --partition-plan-json "$PARTITION_PLAN_JSON" \
+              $CONTINUE_ON_ERROR_FLAG
 
           # Post-test diagnostics
           echo "=== Post-test System Memory Status ==="
@@ -1127,6 +1174,7 @@ jobs:
 
         sgl-kernel-unit-test-amd,
         sgl-kernel-unit-test-2-gpu-amd,
+        compute-diffusion-partitions,
         multimodal-gen-test-1-gpu-amd,
         multimodal-gen-test-2-gpu-amd,
 

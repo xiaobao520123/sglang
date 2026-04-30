@@ -163,12 +163,10 @@ class MultiLayerEagleDraftWorker(BaseDraftWorker):
         )
 
     def init_backends(self):
-        """Initialize draft attention backends and capture cuda graphs (called by scheduler)."""
         with self.draft_tp_context(
             self.draft_runner_list[0].tp_group
         ), speculative_moe_backend_context():
-            self.init_attention_backend()
-            self.init_cuda_graphs()
+            super().init_backends()
 
     def mtp_model_runner(self, step: int):
         return self.draft_runner_list[step]

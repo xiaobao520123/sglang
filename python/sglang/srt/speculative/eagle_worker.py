@@ -218,12 +218,7 @@ class EAGLEWorker(TpModelWorker):
         with self.draft_tp_context(
             self.draft_model_runner.tp_group
         ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
-            # Run ModelRunner's standard init (attention backend, cublas, warmup)
-            # but skip its cuda graph capture — we capture our own draft-specific graphs.
-            backup_disable_cuda_graph = self.server_args.disable_cuda_graph
-            self.server_args.disable_cuda_graph = True
-            self.draft_model_runner.init_backends()
-            self.server_args.disable_cuda_graph = backup_disable_cuda_graph
+            self.draft_model_runner.init_backends(disable_cuda_graph=True)
             self.init_attention_backend()
             self.init_cuda_graphs()
 

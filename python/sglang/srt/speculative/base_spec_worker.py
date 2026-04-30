@@ -20,7 +20,14 @@ class BaseDraftWorker(ABC):
         pass
 
     def init_backends(self):
-        pass
+        """Initialize standard backends (no cuda graphs) then draft-specific backends.
+
+        Subclasses should wrap this with their context managers (draft_tp_context,
+        speculative_moe_backend_context, etc.) rather than reimplementing the logic.
+        """
+        self.draft_worker.init_backends(disable_cuda_graph=True)
+        self.init_attention_backend()
+        self.init_cuda_graphs()
 
 
 class BaseSpecWorker(ABC):

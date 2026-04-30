@@ -92,7 +92,10 @@ class DefaultPoolConfigurator(MemoryPoolConfigurator):
 
         self._cell_size = self._compute_cell_size(mr, num_layers)
 
-        # EAGLE/STANDALONE: scale cell_size to account for draft model KV cache
+        # EAGLE/STANDALONE: scale cell_size to account for draft model KV cache.
+        # Assumes draft and target share the same per-layer KV size (head_dim,
+        # num_kv_heads, dtype), which holds for EAGLE/MTP draft models that
+        # reuse the target architecture's attention config.
         if (
             mr.spec_algorithm.is_eagle() or mr.spec_algorithm.is_standalone()
         ) and not mr.is_draft_worker:

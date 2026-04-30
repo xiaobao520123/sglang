@@ -753,7 +753,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         self.graph_mem_usage = 0
         self.piecewise_cuda_graph_runner = None
 
-    def init_backends(self):
+    def init_backends(self, disable_cuda_graph: bool = False):
         """Initialize attention backends and capture cuda graphs."""
         server_args = self.server_args
 
@@ -764,13 +764,15 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             self.init_attention_backend()
             self.kernel_warmup()
             self._pre_initialize_flashinfer_allreduce_workspace()
-            self.init_device_graphs()
+            if not disable_cuda_graph:
+                self.init_device_graphs()
         elif self.device in ["npu", "cpu"]:
             self.init_attention_backend()
-            self.init_device_graphs()
+            if not disable_cuda_graph:
+                self.init_device_graphs()
         elif current_platform.is_out_of_tree():
             self.init_attention_backend()
-            if current_platform.support_cuda_graph():
+            if current_platform.support_cuda_graph() and not disable_cuda_graph:
                 self.init_device_graphs()
             else:
                 self.graph_runner = None
@@ -779,6 +781,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             self.graph_runner = None
             self.graph_mem_usage = 0
             self.init_attention_backend()
+
+        if disable_cuda_graph:
+            self.graph_runner = None
+            self.graph_mem_usage = 0
 
         if server_args.forward_hooks:
             register_forward_hooks(self.model, server_args.forward_hooks)

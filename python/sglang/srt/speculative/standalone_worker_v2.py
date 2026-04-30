@@ -118,8 +118,7 @@ class StandaloneDraftWorker(EagleDraftWorker):
         with self.draft_tp_context(
             self.draft_runner.tp_group
         ), speculative_moe_backend_context():
-            self.init_attention_backend()
-            self.init_cuda_graphs()
+            super().init_backends()
 
     def init_lm_head(self):
         """Override to prevent sharing embeddings and lm_head with target model."""

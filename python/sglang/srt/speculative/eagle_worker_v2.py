@@ -174,12 +174,10 @@ class EagleDraftWorker(BaseDraftWorker):
         self.init_lm_head()
 
     def init_backends(self):
-        """Initialize draft attention backends and capture cuda graphs (called by scheduler)."""
         with self.draft_tp_context(
             self.draft_runner.tp_group
         ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
-            self.init_attention_backend()
-            self.init_cuda_graphs()
+            super().init_backends()
 
     def init_token_map(self):
         # Load hot token ids

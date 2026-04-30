@@ -98,10 +98,3 @@ class StandaloneWorker(EAGLEWorker):
             req_to_token_pool,
             token_to_kv_pool_allocator,
         )
-
-    def init_backends(self):
-        with self.draft_tp_context(
-            self.draft_model_runner.tp_group
-        ), speculative_moe_backend_context(), speculative_moe_a2a_backend_context():
-            self.init_attention_backend()
-            self.init_cuda_graphs()

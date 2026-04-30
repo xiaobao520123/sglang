@@ -184,6 +184,7 @@ class MultiLayerEagleWorker(TpModelWorker):
         with self.draft_tp_context(
             self.mtp_model_runner(0).tp_group
         ), speculative_moe_backend_context():
+            super().init_backends(disable_cuda_graph=True)
             self.init_attention_backend()
             self.init_cuda_graphs()
 

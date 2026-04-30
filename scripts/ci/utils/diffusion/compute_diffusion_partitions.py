@@ -28,6 +28,17 @@ SUITE_OUTPUT_NAMES = {
 }
 DEFAULT_STANDALONE_EST_TIME_SECONDS = 300.0
 
+# The perf baselines are not AMD CI cold-start estimates: they undercount ROCm
+# kernel warmup, model downloads, and runner-specific startup costs. Keep this
+# overlay local to AMD CI partitioning so we do not distort perf baselines.
+AMD_CI_CASE_ESTIMATE_SCALE = 1.5
+AMD_CI_CASE_ESTIMATE_OVERRIDES = {
+    "1-gpu": {
+        # This case has repeatedly stalled during HF download/startup on mi300.
+        "qwen_image_edit_2511_ti2i": 900.0,
+    },
+}
+
 
 @dataclass(frozen=True)
 class PartitionItem:
@@ -85,9 +96,24 @@ def compute_partition_count(
     return max(min_partition_count, min(preferred_count, max_partition_count))
 
 
+def get_amd_ci_case_est_time(suite_name: str, case_id: str, base_est_time: float) -> float:
+    est_time = base_est_time * AMD_CI_CASE_ESTIMATE_SCALE
+    suite_overrides = AMD_CI_CASE_ESTIMATE_OVERRIDES.get(suite_name, {})
+    override_est_time = suite_overrides.get(case_id)
+    if override_est_time is not None:
+        est_time = max(est_time, override_est_time)
+    return est_time
+
+
 def build_partition_items(suite_info: DiffusionSuiteInfo) -> list[PartitionItem]:
     items = [
-        PartitionItem(kind="case", item_id=case.case_id, est_time=case.est_time)
+        PartitionItem(
+            kind="case",
+            item_id=case.case_id,
+            est_time=get_amd_ci_case_est_time(
+                suite_info.suite, case.case_id, case.est_time
+            ),
+        )
         for case in suite_info.cases
     ]
     items.extend(

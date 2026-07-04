@@ -553,6 +553,8 @@ class Scheduler(
 
         self.init_batch_result_processor()
 
+        self.init_waltz()
+
         self.is_initializing = False
 
     def init_zbal_on_npu(self):
@@ -1443,6 +1445,32 @@ class Scheduler(
                     self.list_external_corpora,
                 ),
             ]
+        )
+
+    def init_waltz(self):
+        GB = 1024**3
+        mr = self.tp_worker.model_runner
+
+        self._S_model_bytes = sum(
+            p.data.numel() * p.data.element_size() for p in mr.model.parameters()
+        ) + sum(b.data.numel() * b.data.element_size() for b in mr.model.buffers())
+
+        gpu_total = torch.cuda.get_device_properties(self.ps.gpu_id).total_memory
+        kv_reserved = int(self.token_to_kv_pool_allocator.get_kvcache().mem_usage * GB)
+        graph_bytes = int(getattr(mr, "graph_mem_usage", 0.0) * GB)
+        safety = int(0.05 * gpu_total)
+
+        weight_budget = gpu_total - kv_reserved - graph_bytes - safety
+        self._r_min = max(0.0, 1.0 - weight_budget / self._S_model_bytes)
+
+        # 每 token KV 字节数（前面已推导）
+        kv_pool = self.token_to_kv_pool_allocator.get_kvcache()
+        kv_size = kv_pool.get_kv_size_bytes()
+        kv_bytes = sum(kv_size) if isinstance(kv_size, tuple) else kv_size
+        self._bytes_per_token = kv_bytes // kv_pool.size
+
+        logger.info(
+            f"[Waltz] S_model_bytes={self._S_model_bytes}, gpu_total={gpu_total}, kv_reserved={kv_reserved}, graph_bytes={graph_bytes}, safety={safety}, weight_budget={weight_budget}, r_min={self._r_min}, bytes_per_token={self._bytes_per_token}"
         )
 
     def _abort_on_running_timeout(self):
@@ -3165,6 +3193,16 @@ class Scheduler(
             else:
                 batch.sampling_info = sched_sampling_info
 
+    @staticmethod
+    def _compute_full_model_bytes(model: torch.nn.Module) -> int:
+        total = 0
+        for p in model.parameters():
+            # p.data 无论是否被 offload 到 CPU，numel × element_size 都是准确的
+            total += p.data.numel() * p.data.element_size()
+        for b in model.buffers():
+            total += b.data.numel() * b.data.element_size()
+        return total
+
     @scheduler_nvtx_method("scheduler.run_batch")
     def run_batch(
         self,
@@ -3172,6 +3210,16 @@ class Scheduler(
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> Union[GenerationBatchResult, EmbeddingBatchResult]:
         """Run a batch."""
+
+        # Calculate KV Cache for requests (K_req)
+        seq_tokens = (
+            int(batch.seq_lens_cpu.sum().item())
+            if batch.seq_lens_cpu is not None
+            else sum(r.seqlen for r in batch.reqs)
+        )
+        K_req = seq_tokens * self._bytes_per_token
+        print(f"K_req for {len(batch.reqs)}: {K_req}")
+
         self.forward_ct += 1
         batch.forward_iter = self.forward_ct
 

@@ -382,11 +382,14 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
     def _cache_loc_dtype(self):
         return torch.int64
 
-    def _make_graph_key(self, bs, stream_idx=None, variant_label=None):
+    def _make_graph_key(
+        self, bs, stream_idx=None, variant_label=None, offload_ratio_bucket_idx=None
+    ):
         return ShapeKey(
             size=bs,
             stream_idx=stream_idx,
             variant_label=variant_label,
+            offload_ratio_bucket_idx=offload_ratio_bucket_idx,
         )
 
     def _resolve_lora_variant(self, forward_batch: ForwardBatch):

@@ -29,8 +29,11 @@ class ShapeKey:
     stream_idx:   pdmux stream index, or None for single-stream runners.
     variant_label: LoRA-variant label ("lora" / "nolora"), or None
         for runners that don't record per-variant graphs.
+    offload_ratio_bucket_idx: the bucket index for the weight offload ratio, or None
+        for runners that don't record per-offload-ratio graphs.
     """
 
     size: int
     stream_idx: Optional[int] = None
     variant_label: Optional[str] = None
+    offload_ratio_bucket_idx: Optional[int] = None

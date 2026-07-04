@@ -544,6 +544,9 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
     # forward-path re-plan would clobber their metadata.
     forward_metadata_replan_equivalent: bool = False
 
+    # For runners that record per-offload-ratio graphs, the bucket index for the weight offload ratio.
+    offload_ratio_bucket_idx: Optional[int] = None
+
     def mark_forward_metadata_ready(self, replan_equivalent: bool = False):
         """Record that attention metadata was pre-planned for this batch.
 
